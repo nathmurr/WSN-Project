@@ -1,0 +1,258 @@
+# ================================================================
+# BGScript demo: Multislave project, master side
+# http://www.bluegiga.com/support
+# ----------------------------------------------------------------
+#
+# CHANGELOG:
+#   2014-03-11 - Initial release
+#
+# ================================================================
+
+const MAX_CONNECTIONS = 8
+
+dim connections                     # keep track of how many connections there are
+dim connected(8)                    # keep track of connection status for each slot
+dim encrypted(8)                    # keep track of encryption status for each slot
+dim scanning
+
+dim pending_connection_handle       # handle for pending connection attempt
+dim conn_timeout                    # countdown timer for detecting failed connection attempts
+dim round_robin                     # index for which connection we are updating at any time
+
+dim atthandle_status_control        # local var for discovering/storing remote handle
+dim atthandle_status_control_ccc    # remote handle for client characteristic configuration
+
+dim ad_field_length
+dim ad_field_type
+
+dim i
+dim j
+dim k
+dim ret_result
+dim temp_buf(16)
+
+event system_boot(major, minor, patch, build, ll_version, protocol_version, hw)
+    # DEBUG
+    call system_endpoint_tx(system_endpoint_uart1, 6, "BOOT\r\n")
+    
+    # TODO: better to use GATT discovery to determine these, not hard-coded
+    # as it is, this will ONLY work with the corresponding multislave_demo slave project
+    atthandle_status_control = 17
+    atthandle_status_control_ccc = 19
+
+    # initialize status
+    connections = 0
+    conn_timeout = 0
+    pending_connection_handle = $ff
+    round_robin = 0
+    memset(connected(0), 0, MAX_CONNECTIONS)
+    
+    # set scan parameters to 125ms/125ms interval/window, and use passive scanning
+    call gap_set_scan_parameters(200, 200, 0)
+
+    # DEBUG
+    call system_endpoint_tx(system_endpoint_uart1, 14, "ROLE: MASTER\r\n")
+    call system_endpoint_tx(system_endpoint_uart1, 10, "SCANNING\r\n")
+
+    # start discovery
+    scanning = 1
+    call gap_discover(gap_discover_generic)
+
+    # start 1-second repeating timer (used for round-robin data pushes and connection timeout detection)
+    call hardware_set_soft_timer(32768, 0, 0)
+end
+
+# catch scan response event while scanning
+event gap_scan_response(rssi, packet_type, sender, address_type, bond, data_len, data_data)
+    # only check for main ad packets (packet_type = 0)
+    if packet_type = 0 then
+        # advertisement packet found during scan, so check for demo status/control service
+        # searched UUID is defined in the slave GATT as 25af9d04-4b85-4f58-97e1-845bd4dd5e38
+        # NOTE: LITTLE-ENDIAN BYTE ORDER
+        temp_buf(0:16) = "\x38\x5e\xdd\xd4\x5b\x84\xe1\x97\x58\x4f\x85\x4b\x04\x9d\xaf\x25"
+
+        i = 0
+        while i < data_len
+            ad_field_length = data_data(i:1)
+            ad_field_type = data_data(i + 1:1)
+            if ad_field_type = $06 || ad_field_type = $07 then
+                # partial ($06) or complete ($07) list of 128-bit UUIDs
+
+                j = 0
+                while j < ad_field_length - 1
+                    # DEBUG
+                    #call system_endpoint_tx(system_endpoint_uart1, 16, "FOUND SVC UUID: ")
+                    #k = 0
+                    #while k < 16
+                    #    temp_buf(16:1) = (data_data(i + j + 2 + k:1)/$10) + 48 + ((data_data(i + j + 2 + k:1)/$10)/10*7)
+                    #    temp_buf(17:1) = (data_data(i + j + 2 + k:1)&$f)  + 48 + ((data_data(i + j + 2 + k:1)&$f )/10*7)
+                    #    temp_buf(18:1) = $20
+                    #    call system_endpoint_tx(system_endpoint_uart1, 3, temp_buf(16:3))
+                    #    k = k + 1
+                    #end while
+                    #call system_endpoint_tx(system_endpoint_uart1, 2, "\r\n")
+
+                    if memcmp(data_data(i + j + 2), temp_buf(0), 16) && scanning = 1 then
+                        # DEBUG
+                        call system_endpoint_tx(system_endpoint_uart1, 13, "FOUND SLAVE\r\n")
+
+                        # found status/control service, so connect (stops scanning automatically)
+                        call gap_connect_direct(sender(0:6), address_type, $40, $60, 100, 0)(ret_result, k)
+                        scanning = 0
+                        pending_connection_handle = k
+
+                        # initialize connection timeout detection countdown (~4 seconds)
+                        conn_timeout = 4
+                        
+                        # exit gap_scan_response event handler immediately
+                        return
+                    end if
+                    j = j + 16
+                end while
+            end if
+            i = i + ad_field_length + 1
+        end while
+    end if
+end
+
+# catch connection update event
+event connection_status(connection, flags, address, address_type, conn_interval, timeout, latency, bonding)
+    # check for "new connection established" update
+    if (flags & $05) = $05 then
+        # clear connection countdown timer so we don't trigger it
+        conn_timeout = 0
+        pending_connection_handle = $ff
+
+        # DEBUG
+        call system_endpoint_tx(system_endpoint_uart1, 19, "CONNECTED TO SLAVE ")
+        call system_endpoint_tx(system_endpoint_uart1, 1, connection + $30)
+        call system_endpoint_tx(system_endpoint_uart1, 2, "\r\n")
+        
+        # subscribe to indications by writing 0x0002 to remote client characteristic configuration attribute
+        call attclient_attribute_write(connection, atthandle_status_control_ccc, 2, $0002)
+
+        # update status
+        connections = connections + 1
+        connected(connection:1) = 1
+
+        # if we aren't at max connections, then resume scanning
+        if connections < MAX_CONNECTIONS && scanning = 0 then
+            # DEBUG
+            call system_endpoint_tx(system_endpoint_uart1, 10, "SCANNING\r\n")
+            
+            # start discovery
+            scanning = 1
+            call gap_discover(gap_discover_generic)
+        end if
+    end if
+
+    # check for "encrypted" status update (i.e. paired)
+    if (flags & $02) = $02 then
+        # DEBUG
+        call system_endpoint_tx(system_endpoint_uart1, 1, connection + $30)
+        call system_endpoint_tx(system_endpoint_uart1, 12, " ENCRYPTED\r\n")
+        
+        # update status
+        encrypted(connection:1) = 1
+    end if
+end
+
+# catch disconnection event
+event connection_disconnected(handle, result)
+    # DEBUG
+    call system_endpoint_tx(system_endpoint_uart1, 1, handle + $30)
+    call system_endpoint_tx(system_endpoint_uart1, 15, " DISCONNECTED: ")
+    temp_buf(0:1) = ((result >> 12) & $f) + 48 + ((result >> 12) & $f)/10*7
+    temp_buf(1:1) = ((result >> 8) & $f) + 48 + ((result >> 8) & $f)/10*7
+    temp_buf(2:1) = ((result >> 4) & $f) + 48 + ((result >> 4) & $f)/10*7
+    temp_buf(3:1) = (result & $f) + 48 + (result & $f)/10*7
+    call system_endpoint_tx(system_endpoint_uart1, 4, temp_buf(0:4))
+    call system_endpoint_tx(system_endpoint_uart1, 2, "\r\n")
+    
+    # update status
+    connected(handle:1) = 0
+    encrypted(handle:1) = 0
+    connections = connections - 1
+
+    if scanning = 0 then
+        # DEBUG
+        call system_endpoint_tx(system_endpoint_uart1, 10, "SCANNING\r\n")
+        
+        # start discovery
+        scanning = 1
+        call gap_discover(gap_discover_generic)
+    end if
+end
+
+# catch timer tick (used to update the slave and detect connection attempt timeouts)
+event hardware_soft_timer(handle)
+    # check for connection attempt timeout timer
+    if conn_timeout > 0 then
+        conn_timeout = conn_timeout - 1
+        
+        # check for timeout condition (decremented to zero)
+        if conn_timeout = 0 && pending_connection_handle != $ff then
+            # DEBUG
+            call system_endpoint_tx(system_endpoint_uart1, 21, "TIMER: CONN TIMEOUT\r\n")
+            
+            # end connection attempt
+            call connection_disconnect(pending_connection_handle)
+
+            if scanning = 0 then
+                # DEBUG
+                call system_endpoint_tx(system_endpoint_uart1, 10, "SCANNING\r\n")
+                
+                # start discovery
+                scanning = 1
+                call gap_discover(gap_discover_generic)
+            end if
+        end if
+    end if
+    
+    # update next slave once per second
+    if connections > 0 then
+        # find the next connected slot (may be current slot)
+        # this will only loop a maximum of 7 times since we
+        # know there is already at least one connection
+        while connected(round_robin:1) = 0
+            round_robin = round_robin + 1
+            if round_robin = MAX_CONNECTIONS then
+                round_robin = 0
+            end if
+        end while
+        
+        # DEBUG
+        call system_endpoint_tx(system_endpoint_uart1, 20, "TIMER: UPDATE SLAVE ")
+        call system_endpoint_tx(system_endpoint_uart1, 1, round_robin + $30)
+        call system_endpoint_tx(system_endpoint_uart1, 2, "\r\n")
+
+        # update current round-robin slave (0x5A595857 which is "WXYZ" in ASCII, big-endian)
+        # this will be written via an acknowledged write operation to the slave
+        call attclient_attribute_write(round_robin, atthandle_status_control, 4, $5758595a)
+        
+        # increment/wrap round-robin index
+        round_robin = round_robin + 1
+        if round_robin = MAX_CONNECTIONS then
+            round_robin = 0
+        end if
+    end if
+end
+
+# catch indicated data from the slave
+event attclient_attribute_value(connection, handle, type, value_len, value_data)
+    if handle = atthandle_status_control then
+        # DEBUG (rudimentary binary-to-ASCII-HEX loop to display all 4 written bytes)
+        call system_endpoint_tx(system_endpoint_uart1, 6, "SLAVE ")
+        call system_endpoint_tx(system_endpoint_uart1, 1, connection + $30)
+        call system_endpoint_tx(system_endpoint_uart1, 2, ": ")
+        i = 0
+        while i < value_len
+            temp_buf(0:1) = (value_data(i:1)/$10) + 48 + ((value_data(i:1)/$10)/10*7)
+            temp_buf(1:1) = (value_data(i:1)&$f)  + 48 + ((value_data(i:1)&$f )/10*7)
+            temp_buf(2:1) = $20 # ' '
+            call system_endpoint_tx(system_endpoint_uart1, 3, temp_buf(0:3))
+            i = i + 1
+        end while
+        call system_endpoint_tx(system_endpoint_uart1, 2, "\r\n")
+    end if
+end

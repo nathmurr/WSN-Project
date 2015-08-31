@@ -1,0 +1,95 @@
+# Nathan Murray Prototype Light Intensity sensor
+#Slave address is floating therefore 0x72
+#
+#
+#
+#
+#
+#
+event system_boot(major ,minor ,patch ,build ,ll_version ,protocol_version ,hw)
+
+#Set timer to generate event every 1s
+    call hardware_set_soft_timer(32000, 1, 0)
+
+end
+
+dim written
+dim result
+dim data_len
+dim data
+dim string(3)
+dim temp
+dim count
+dim local_temp
+
+# procedure to output ASCII-formatted integer from a Hex value (input range [0, 2147483647]) obtained from https://bluegiga.zendesk.com/entries/83269447-Convert-digit-to-ascii-hex-equivalent
+dim x_int_work(9)
+dim x_int_out(11)
+procedure print_uint31(endpoint, num)
+    x_int_work(0:1) = "\x00"
+    x_int_work(1:4) = num
+    if x_int_work(1:4) = 0 then
+        x_int_out(10 - x_int_work(0:1):1) = "0"       # already zero, so just use it
+        x_int_work(0:1) = x_int_work(0:1) + 1         # string length increment
+    else
+        while x_int_work(1:4) > 0
+            x_int_work(5:4) = (x_int_work(1:4) / 10) * 10     # create "decimal mask" for diff calc
+            x_int_out(10 - x_int_work(0:1):1) = x_int_work(1:4) - x_int_work(5:4) + $30 # next digit
+            x_int_work(0:1) = x_int_work(0:1) + 1             # string length increment
+            x_int_work(1:4) = x_int_work(1:4) / 10            # shift next decimal place over
+        end while
+    end if
+    call system_endpoint_tx(endpoint, x_int_work(0:1), x_int_out(11 - x_int_work(0:1):x_int_work(0:1)))
+end
+
+
+
+#Timer event listener
+event hardware_soft_timer(handle)
+
+call hardware_i2c_write($80,1,2,"\x02\x78")(written) # write to configuration register x02, x78 is sample every 4 seconds for minimum noise error
+######################################################## local temp
+
+call hardware_i2c_write($80,0,1,"\x01")(written) #write to local temperature register
+call hardware_i2c_read($80,1,2)(result,data_len,data) # read 2 bytes from local temperature register
+#data = "\x12\x34"
+temp = data
+local_temp = data
+local_temp = (local_temp >> 2) # move 2 bits as D0 and D1 isn't used in local temp register
+
+local_temp = (local_temp >> 0)
+local_temp = (local_temp & "\x3F")
+call system_endpoint_tx(4, 8, "Local = ")
+call print_uint31(4, local_temp) # print number to UART1
+call system_endpoint_tx(4, 1, " ")
+
+
+local_temp = data
+local_temp = (local_temp >> 8)
+local_temp = (local_temp & "\xFF")
+call print_uint31(4, local_temp) # print number to UART1
+
+########################################################## local temp
+
+call hardware_i2c_write($80,0,1,"\x00")(written) # write to DATA0 register without stop bit
+call hardware_i2c_read($80,1,2)(result,data_len,data) # get DATA0 register value without stop bit
+#data = "\x12\x34"
+temp = data
+#call print_uint31(4, local_temp) # print number to UART1
+
+temp = (temp >> 0)
+temp = (temp & "\xFF")
+
+call system_endpoint_tx(4, 10, " Sensor = ")
+call print_uint31(4, temp) # print number to UART1
+call system_endpoint_tx(4, 1, " ")
+
+
+temp = data
+temp = (temp >> 8)
+temp = (temp & "\xFF")
+call print_uint31(4, temp) # print number to UART1
+
+call system_endpoint_tx(4, 2, "\r\n")
+
+end

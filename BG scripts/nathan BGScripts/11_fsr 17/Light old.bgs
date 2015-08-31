@@ -1,0 +1,57 @@
+# Nathan Murray Prototype Light Intensity sensor
+#Slave address is floating therefore 0x72
+#
+#
+#
+#
+#
+#
+event system_boot(major ,minor ,patch ,build ,ll_version ,protocol_version ,hw)
+
+#Set timer to generate event every 1s
+    call hardware_set_soft_timer(32768, 1, 0)
+
+end
+
+dim written
+dim result
+dim data_len
+dim data
+dim string(3)
+
+
+# procedure to output ASCII-formatted integer from a Hex value (input range [0, 2147483647]) obtained from https://bluegiga.zendesk.com/entries/83269447-Convert-digit-to-ascii-hex-equivalent
+dim x_int_work(9)
+dim x_int_out(11)
+procedure print_uint31(endpoint, num)
+    x_int_work(0:1) = "\x00"
+    x_int_work(1:4) = num
+    if x_int_work(1:4) = 0 then
+        x_int_out(10 - x_int_work(0:1):1) = "0"       # already zero, so just use it
+        x_int_work(0:1) = x_int_work(0:1) + 1         # string length increment
+    else
+        while x_int_work(1:4) > 0
+            x_int_work(5:4) = (x_int_work(1:4) / 10) * 10     # create "decimal mask" for diff calc
+            x_int_out(10 - x_int_work(0:1):1) = x_int_work(1:4) - x_int_work(5:4) + $30 # next digit
+            x_int_work(0:1) = x_int_work(0:1) + 1             # string length increment
+            x_int_work(1:4) = x_int_work(1:4) / 10            # shift next decimal place over
+        end while
+    end if
+    call system_endpoint_tx(endpoint, x_int_work(0:1), x_int_out(11 - x_int_work(0:1):x_int_work(0:1)))
+end
+
+
+
+#Timer event listener
+event hardware_soft_timer(handle)
+
+call hardware_i2c_write($80,1,4,"\x02\x78\x00")(written) #turn sensor on by writing 0x03 to address 0x00 using command code 0x80
+
+call hardware_i2c_write($80,0,1,"\xFF")(written) # write to DATA0 register without stop bit
+call hardware_i2c_read($80,1,2)(result,data_len,data) # get DATA0 register value without stop bit
+call system_endpoint_tx(4, 9, "result = ")
+call print_uint31(4, data) # print number to UART1
+call print_uint31(4, data) # print number to UART1
+call system_endpoint_tx(4, 2, "\r\n")
+
+end

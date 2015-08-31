@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<hardware>
+    <sleeposc enable="true" ppm="30" />
+    <usb enable="false" endpoint="none" />
+    <sleep enable="true" />
+    <txpower power="15" bias="5" />
+    <script enable="true" />
+    <usart channel="1" alternate="1" baud="115200" flow="false" endpoint="none" />
+    <port index="0" pull="down" />
+    <port index="0" pull="down" />
+    <port index="0" pull="down" />
+</hardware>

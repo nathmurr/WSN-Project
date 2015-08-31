@@ -1,0 +1,43 @@
+event system_boot(major ,minor ,patch ,build ,ll_version ,protocol_version ,hw)
+	
+	call hardware_io_port_config_irq(0, $01, 1) #Enable interrupt on port 0_0 falling edge
+	call hardware_io_port_config_irq(1, $01, 0) #Enable interrupt on port 1_0 rising edge
+
+	call gap_set_scan_parameters($10, $0A, 1)		#set scan parameters, 0x4B = default scan interval 75ms, 0x32 = default scan_window 50ms, 0x00 = passive scanning
+	call gap_set_mode($80, gap_scannable_non_connectable)
+		call gap_discover(gap_discover_observation)		#discover limited and generic discoverable devices
+
+end
+	dim dat(2)
+	dim x_int_work(9)
+	dim x_int_out(11)
+event gap_scan_response(rssi, packet_type, sender, address_type, bond, data_len, data_data)
+dat(0:2) = data_data(0)
+
+    x_int_work(0:1) = "\x00"
+    x_int_work(1:4) = dat(0:2)
+    if x_int_work(1:4) = 0 then
+        x_int_out(10 - x_int_work(0:1):1) = "0"       # already zero, so just use it
+        x_int_work(0:1) = x_int_work(0:1) + 1         # string length increment
+    else
+        while x_int_work(1:4) > 0
+            x_int_work(5:4) = (x_int_work(1:4) / 10) * 10     # create "decimal mask" for diff calc
+            x_int_out(10 - x_int_work(0:1):1) = x_int_work(1:4) - x_int_work(5:4) + $30 # next digit
+            x_int_work(0:1) = x_int_work(0:1) + 1             # string length increment
+            x_int_work(1:4) = x_int_work(1:4) / 10            # shift next decimal place over
+        end while
+    end if
+    call system_endpoint_tx(4, x_int_work(0:1), x_int_out(11 - x_int_work(0:1):x_int_work(0:1)))
+	call system_endpoint_tx(4, 2, "  ") #Create new line to debug UART
+end
+	
+
+# GPIO interrupt listener
+#event hardware_io_port_status(timestamp, port, irq, state)
+#call system_endpoint_tx(4, 10, "Activated Dir = ") #Upon event send Activated to Debug UART
+#call print_uint31(4, 255-state) # print integer result to UART
+#call system_endpoint_tx(4, 2, "\r\n") #Create new line to debug UART
+#end
+# Soft timer event listener
+event hardware_soft_timer(handle)
+end 

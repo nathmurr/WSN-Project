@@ -1,0 +1,64 @@
+# Nathan Murray 
+# 02/04/2015
+# Ultrasonic sensor 
+# RC circuit 1uF capacitor and 220k ohm resistor used across GND and Echo
+#
+# VCC = +5V
+# Trig = P0_6
+# Echo = P0_1
+# RC Output = P0_0
+# GND = 0V
+
+
+
+event system_boot(major, minor, patch, build, ll_version, protocol_version, hw)
+ 
+   # Configure P0_6 as output (port=0, pin mode mask = 0b01000000)
+	call hardware_io_port_config_direction(0, $40) #Trigger P0_6 set as output read to create trigger
+	call hardware_io_port_config_irq(0, $2, 0) #P0_1 set as IRQ event on falling edge
+
+	call hardware_io_port_write(0, $40, $00) #Initially set Trigger low
+		
+call hardware_set_soft_timer($4000, 0, 0) # set continuous timer of around 0.5s
+
+
+end
+# procedure to output ASCII-formatted integer from a Hex value (input range [0, 2147483647]) obtained from https://bluegiga.zendesk.com/entries/83269447-Convert-digit-to-ascii-hex-equivalent
+dim x_int_work(9)
+dim x_int_out(11)
+procedure print_uint31(endpoint, num)
+    x_int_work(0:1) = "\x00"
+    x_int_work(1:4) = num
+    if x_int_work(1:4) = 0 then
+        x_int_out(10 - x_int_work(0:1):1) = "0"       # already zero, so just use it
+        x_int_work(0:1) = x_int_work(0:1) + 1         # string length increment
+    else
+        while x_int_work(1:4) > 0
+            x_int_work(5:4) = (x_int_work(1:4) / 10) * 10     # create "decimal mask" for diff calc
+            x_int_out(10 - x_int_work(0:1):1) = x_int_work(1:4) - x_int_work(5:4) + $30 # next digit
+            x_int_work(0:1) = x_int_work(0:1) + 1             # string length increment
+            x_int_work(1:4) = x_int_work(1:4) / 10            # shift next decimal place over
+        end while
+    end if
+    call system_endpoint_tx(endpoint, x_int_work(0:1), x_int_out(11 - x_int_work(0:1):x_int_work(0:1)))
+end
+
+# Soft timer event listener
+event hardware_soft_timer(handle)
+
+	
+	call hardware_io_port_write(0, $40, $40)	#Set trigger high
+	call hardware_io_port_write(0, $40, $00)	#set trigger low this creates a 400us pulse
+
+	end
+	
+	
+	# GPIO interrupt listener (Echo gone low and RC charged depending on pulse width)
+event hardware_io_port_status(timestamp, port, irq, state)
+call hardware_adc_read(0, 3, 2) #Read voltage of Echo
+end
+
+event hardware_adc_result(input, value)
+call system_endpoint_tx(4, 2, "\r\n") #Create new line to debug UART
+call print_uint31(4, value) # print integer result to UART
+end

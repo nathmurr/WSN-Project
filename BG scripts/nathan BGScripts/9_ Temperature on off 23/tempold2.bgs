@@ -1,0 +1,115 @@
+# Nathan Murray Prototype Light Intensity sensor
+#
+#
+#
+#
+#
+#
+#
+event system_boot(major ,minor ,patch ,build ,ll_version ,protocol_version ,hw)
+
+#Set timer to generate event every 1s
+    call hardware_set_soft_timer(32768, 1, 0)
+
+end
+
+dim written
+dim result
+dim data_len
+dim data
+dim string(3)
+dim temp
+dim temp2
+dim count
+dim tmp(5)
+dim rh
+
+# procedure to output ASCII-formatted integer from a Hex value (input range [0, 2147483647]) obtained from https://bluegiga.zendesk.com/entries/83269447-Convert-digit-to-ascii-hex-equivalent
+dim x_int_work(9)
+dim x_int_out(11)
+procedure print_uint31(endpoint, num)
+    x_int_work(0:1) = "\x00"
+    x_int_work(1:4) = num
+    if x_int_work(1:4) = 0 then
+        x_int_out(10 - x_int_work(0:1):1) = "0"       # already zero, so just use it
+        x_int_work(0:1) = x_int_work(0:1) + 1         # string length increment
+    else
+        while x_int_work(1:4) > 0
+            x_int_work(5:4) = (x_int_work(1:4) / 10) * 10     # create "decimal mask" for diff calc
+            x_int_out(10 - x_int_work(0:1):1) = x_int_work(1:4) - x_int_work(5:4) + $30 # next digit
+            x_int_work(0:1) = x_int_work(0:1) + 1             # string length increment
+            x_int_work(1:4) = x_int_work(1:4) / 10            # shift next decimal place over
+        end while
+    end if
+    call system_endpoint_tx(endpoint, x_int_work(0:1), x_int_out(11 - x_int_work(0:1):x_int_work(0:1)))
+end
+
+
+
+#Timer event listener
+event hardware_soft_timer(handle)
+
+#7 bit address is x40, therefore 8 bit address is x80, don't have to worry about read/write bit as compiler deals with it
+
+#call hardware_i2c_write($80,1,1,"\xFE")(written) #turn sensor on by writing to xFE
+
+call hardware_i2c_write($80,1,1,"\xE3")(written) # write to temperature conversion register
+
+call hardware_i2c_read($80,1,3)(result,data_len,data) # read temperature result plus CRC (3rd byte)
+
+call system_endpoint_tx(4, 7, "Temp = ")
+
+#convert MSB to numbers for debug output
+temp = data
+temp = (temp >> 4)
+temp = (temp & "\x0F")
+count = temp * 4096
+temp = data
+temp = (temp & "\x0F")
+temp = (temp >> 0)
+count = count + (temp * 256)
+
+#convert LSB to numbers for debug output
+temp = data
+temp = (temp >> 12)
+temp = (temp & "\x0F")
+count = count + (temp * 16)
+temp = data
+temp = (temp >> 8)
+temp = (temp & "\x0F")
+count = count + temp
+call system_endpoint_tx(4, 1, " ")
+call print_uint31(4, count) # output raw temp value as a number to debug
+call system_endpoint_tx(4, 2, "\r\n")
+
+
+call hardware_i2c_write($80,1,1,"\xE5")(written) # write to humidity conversion register
+
+call hardware_i2c_read($80,1,3)(result,data_len,data) # read humidity result plus CRC (3rd byte)
+call system_endpoint_tx(4, 6, "Hum = ")
+
+#convert MSB to numbers for debug output
+temp = data
+temp = (temp >> 4)
+temp = (temp & "\x0F")
+count = temp * 4096
+temp = data
+temp = (temp & "\x0F")
+temp = (temp >> 0)
+count = count + (temp * 256)
+
+#convert LSB to numbers for debug output
+temp = data
+temp = (temp >> 12)
+temp = (temp & "\x0F")
+count = count + (temp * 16)
+temp = data
+temp = (temp >> 8)
+temp = (temp & "\x0F")
+
+count = count + temp
+call system_endpoint_tx(4, 1, " ")
+call print_uint31(4, count) # output raw humidity value to debug
+call system_endpoint_tx(4, 2, "\r\n")
+
+end

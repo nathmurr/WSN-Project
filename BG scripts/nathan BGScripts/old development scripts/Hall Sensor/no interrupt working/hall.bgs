@@ -1,0 +1,33 @@
+event system_boot(major ,minor ,patch ,build ,ll_version ,protocol_version ,hw)
+
+#Set timer to generate event every 1s
+    call hardware_set_soft_timer(32768, 1, 0)
+
+# configure P0 as inputs
+	call hardware_io_port_config_direction(0, $FE)
+
+end
+
+dim string(3)
+dim result
+dim port
+dim data
+
+
+#Timer event listener
+event hardware_soft_timer(handle)
+   call hardware_io_port_read(0, $01)(result, port, data) #readP1.0
+   if data & $01 then
+  # pin was set to high
+  call system_endpoint_tx(4, 3, "1")
+else
+  # pin was set to low
+  call system_endpoint_tx(4, 3, "0")
+end if
+
+##string(0:1) = (data / 100) + 48
+#string(1:1) = (data / 10) + (data / -100 * 10) + 48
+#string(2:1) = data + (data / 10 * -10) + 48
+   #call system_endpoint_tx(4, 3, string(0:2))
+   
+end

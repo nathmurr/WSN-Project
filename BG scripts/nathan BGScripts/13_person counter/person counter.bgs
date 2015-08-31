@@ -1,0 +1,95 @@
+#
+#
+#
+#
+#reference to outside relates to the PIR sensor nearest to the entry/exit door
+#reference to inside relates to the PIR sensor on the inside of the building
+
+dim person_count
+dim pir_inside_active
+dim pir_outside_active
+dim direction_flag # 0 = inside active first 1 = outside active first
+
+
+event system_boot(major ,minor ,patch ,build ,ll_version ,protocol_version ,hw)
+
+	call hardware_io_port_config_direction(0, $0)#set P0 as inputs
+	call hardware_io_port_write(0, $fC, $fC)	#Set P0 high
+	call hardware_io_port_write(1, $ff, $ff) # Set P1 high
+	call hardware_io_port_config_direction(2, $0) #Set P2 as inputs
+	call hardware_io_port_write(2, $ff, $ff) # Set P2 high
+	call hardware_io_port_config_direction(1, $3) # set P1_1 and P1_2 as outputs
+	
+	call hardware_io_port_config_irq(0, $03, 0)#set port 0_0 J2-3 as interrupt on rising edge
+	call gap_set_adv_parameters(200, 200, $04)#set min max time to 200 and advertise on one channel only
+	call gap_set_mode(0, 0)#turn all advertisements off initially
+
+	pir_inside_active = 0 # initialise inside_pir flag to 0
+	pir_outside_active = 0 # initialise outside_pir flag to 0
+	person_count = 0 # initialise person_counter
+end
+
+dim output (5) #initialise output array
+
+event hardware_io_port_status(timestamp, port, irq, state) #interrupt has occured
+	
+	
+	if irq = 1 then #outside PIR has triggered
+		pir_outside_active = 1 #set outside flag to 1
+	
+			if pir_inside_active = 0 then # If PIR inside hasn't yet triggered then outside is the first to trigger
+				direction_flag = 0 # set direction flag to 0 = into the house
+			end if
+	
+		
+	end if
+	
+	if irq = 2 then #inside PIR has triggered
+		pir_inside_active = 1 # set inside flag to 1
+	
+			if pir_outside_active = 0 then # If PIR outside hasn't yet triggered then inside is the first to trigger
+				direction_flag = 1 # set direction flag to 1 = out of the house
+			end if	
+	
+		
+	end if
+	call hardware_set_soft_timer(32768, 1, 1) #wait a predetermined amount of time for other PIR sensor to trigger
+	end
+	
+	
+	
+event hardware_soft_timer(handle)
+if (handle = 1) then #
+	if pir_inside_active = 1 && pir_outside_active = 1 then #both sensors have activated within the set time
+		if direction_flag = 0 then #coming into the house
+			person_count = person_count + 1 #increment person count
+			else # direction_flag must be 1 out of house
+				if person_count > 0 then # don't go below 0
+				person_count = person_count - 1 # decrement person_count
+				end if
+		end if
+		
+		output(0:1) = $55	#serial number byte 1 
+		output(1:1) = $F1   #serial number byte 2 (2711 = 10001 in decimal)
+		output(2:1) = person_count   #this is the data
+		output(3:1) = $FF   #end of data
+		output(4:1) = $FF   #end of data to be processed at the other end
+	
+		call gap_set_adv_data(0, 5, output(0:5))#advertise data
+		call gap_set_mode($84, gap_scannable_non_connectable)	# $84 to enable enhanced broadcasting (central node will acknowledge receipt)
+		call hardware_set_soft_timer(32678, 2, 1)#timeout in case central node doesn't acknowledge
+	end if
+pir_inside_active = 0 # reinitialise flag for next capture
+pir_outside_active = 0 # reinitialise flag for next capture
+end if
+
+if (handle = 2) then #1 second timeout if central node doesn't acknowledge
+	call gap_set_mode(0, 0)	#end broadcasts so processor can go back to sleep and discontinue transmissions
+end if
+end
+
+event gap_scan_response(rssi, packet_type, sender, address_type, bond, data_len, data_data) # central node has acknowledged
+	if packet_type = 3 then	#central node has acknowledged receipt of sent data
+		call gap_set_mode(0, 0)	#end broadcasts so processor can go back to sleep and discontinue transmissions
+	end if
+end

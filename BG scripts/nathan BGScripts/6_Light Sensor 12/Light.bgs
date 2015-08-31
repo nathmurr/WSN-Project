@@ -1,0 +1,89 @@
+#Nathan Murray 
+#Light sensor node BLE113 script
+#20/08/15 Rev -
+#Script communicates to TLS2561 light sensor via I2C address $72
+#Battery percentage is appended to data message also
+
+
+event system_boot(major ,minor ,patch ,build ,ll_version ,protocol_version ,hw)
+
+    call gap_set_mode($84, gap_non_connectable)	# $84 to enable enhanced broadcasting (central node will acknowlwdge receipt of a broadcast)
+	call gap_set_adv_parameters($200, $200, $04)
+    call hardware_set_soft_timer(70000, 1, 0)	# continuous timer
+end
+
+dim written
+dim result
+dim data_len
+dim data
+dim string(3)
+dim output (8)
+
+event hardware_soft_timer(handle)
+
+if (handle = 1) then # main timer
+
+	call hardware_i2c_write($72,1,2,"\x00\x03")(written) #turn sensor on by writing 0x03 to address 0x00 using command code 0x72
+	call gap_set_mode($84, gap_non_connectable)	# $84 to enable enhanced broadcasting (central node will acknowlwdge receipt of a broadcast)
+	output(0:1) = $2E	#serial number byte 1 
+	output(1:1) = $E1   #serial number byte 2 (2EE1 = 12001 in decimal)
+		
+	call hardware_i2c_write($72,0,1,"\xAC")(written) # write 1 byte to DATA0LOW register without stop bit
+	call hardware_i2c_read($72,1,2)(result,data_len,data) # get DATA0LOW register value with stop bit (2 bytes)
+
+	output(2:1) = data #send received data to array
+
+	call hardware_i2c_write($72,0,1,"\xAD")(written) # write to DATA0High register without stop bit
+	call hardware_i2c_read($72,1,2)(result,data_len,data) # get DATA0High register value with stop bit (2 bytes)
+
+	output(3:1) = data #send received data to array
+
+	call hardware_i2c_write($72,0,1,"\xAE")(written) # write to DATA1LOW register without stop bit
+	call hardware_i2c_read($72,1,2)(result,data_len,data) # get DATA1LOW register value with stop bit (2 bytes)
+
+	output(4:1) = data #send received data to array
+
+	call hardware_i2c_write($72,0,1,"\xAF")(written) # write to DATA1 High register without stop bit
+	call hardware_i2c_read($72,0,2)(result,data_len,data) # get DATA1 High register value with stop bit (2 bytes)
+
+	output(5:1) = data #send received data to array
+	output(6:1) = $ff  #end of data
+	output(7:1) = $ff  #end of data
+	
+	call hardware_i2c_write($72,1,2,"\x00\x00")(written) #Put light sensor into power down mode
+	call hardware_adc_read(15, 3, 0) #read battery percentage adc
+end if
+
+if (handle = 2) then # called after battery ADC read as timeout for gap broadcasts if no response from central node
+	call gap_set_mode(0, 0)	#end broadcasts so processor can go back to sleep and discontinue transmissions
+	call hardware_set_soft_timer(70000, 1, 0) #set original timer
+end if
+
+end
+
+event hardware_adc_result(input, value)
+
+if input = 15 then #15 is a battery adc read
+	bat_pct = (value - 17616) * 100 / (23342 - 17616) #obtained from bluegiga
+	# enforce 0%/100% bounds, obtained from bluegiga
+        if bat_pct > 100 then
+            bat_pct = 100
+        end if
+        if bat_pct < 0 then
+            bat_pct = 0
+        end if
+		
+		output(8:1) = bat_pct	#set output byte for battery percentage
+		call hardware_set_soft_timer( 0, 1, 1) #disable current timer as only one timer can run at a time
+		call hardware_set_soft_timer(32678, 2, 1)#1 second timeout if central node doesn't acknowledge
+		call gap_set_mode($84, gap_undirected_connectable)	# $84 to enable enhanced broadcasting (central node should acknowlwdge receipt of a broadcast
+		call gap_set_adv_data(0, 9, output_res(0:9))# send result to central node
+
+end if
+end
+
+event gap_scan_response(rssi, packet_type, sender, address_type, bond, data_len, data_data) # central node has acknowledged
+	if packet_type = 3 then	#central node has acknowledged receipt of sent data
+		call gap_set_mode(0, 0)	#end broadcasts so processor can go back to sleep and discontinue transmissions
+	end if
+end

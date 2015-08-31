@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+
+<hardware>
+    <sleeposc enable="false" ppm="30" />
+<usb enable="false" />
+<txpower power="15" bias="5" />
+<script enable="false" />
+<usart channel="0" mode="uart" stop="high" start="low" stopbits="1" alternate="1" baud="57600" endpoint="api" flow="false" />
+<port index="0" tristatemask="0" pull="down" />
+<wakeup_pin enable="true" port="1" pin="0" />
+<slow_clock enable="false" />
+
+</hardware>

@@ -1,0 +1,64 @@
+# Nathan Murray Prototype Light Intensity sensor
+#Slave address is floating therefore 0x72
+#
+#
+#
+#
+#
+dim output_res(8)
+dim ranm
+dim temp
+dim bat_pct     # container for battery measurement percentage
+event system_boot(major, minor, patch, build, ll_version, protocol_version, hw)
+    # set P0_0 and P0_1 to output mode, one low (P0_0) and one high (P0_1)
+    # (use these for easy reference of GND and VDD readings)
+	 call gap_set_mode($84, gap_non_connectable)	# $84 to enable enhanced broadcasting (central node will acknowlwdge receipt of a broadcast
+	call gap_set_adv_parameters(1000, 2000, $04)
+	#call hardware_io_port_config_direction(0, $3)
+	#call hardware_io_port_write(0, $3, $2)
+
+    # begin advertising at boot
+    call gap_set_mode(gap_general_discoverable, gap_undirected_connectable)
+
+    # enable 1-second repeating timer
+	call hardware_set_soft_timer(60000, 0, 0)
+end
+
+event hardware_soft_timer(handle)
+    # trigger ADC read on P0_6, full 12-bit decimation, AVDD reference
+    call hardware_adc_read(0, 3, 2)
+	call hardware_adc_read(15, 3, 0) #read battery percentage
+end
+
+event hardware_adc_result(input, value)
+if input = $0 then
+    # write 2 bytes of ADC data to GATT characteristic
+
+#bit shift by 8 to get LSB
+temp = (value >> 8)
+ranm = value
+
+output_res(0:1) = $4E	#serial number byte 1 
+output_res(1:1) = $21   #serial number byte 2 (36B1 = 14001 in decimal)
+output_res(2:3) = temp
+output_res(3:3) = ranm
+output_res(4:1) = $FF
+output_res(5:1) = $FF
+#call gap_set_adv_data(0, 6, output_res(0:6))					# send result to central node
+end if
+
+if input = 15 then
+bat_pct = (value - 17616) * 100 / (23342 - 17616)
+# enforce 0%/100% bounds
+        if bat_pct > 100 then
+            bat_pct = 100
+        end if
+        if bat_pct < 0 then
+            bat_pct = 0
+        end if
+		
+		output_res(6:1) = bat_pct
+		call gap_set_adv_data(0, 7, output_res(0:7))					# send result to central node
+		
+end if
+end

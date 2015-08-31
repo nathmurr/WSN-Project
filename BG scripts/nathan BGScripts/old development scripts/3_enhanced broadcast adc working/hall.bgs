@@ -1,0 +1,69 @@
+dim no_ack_count	# counter for central node no acknowledgement count
+dim ack_response	# counter for central node acknowledge response flag
+
+event system_boot(major ,minor ,patch ,build ,ll_version ,protocol_version ,hw)
+	
+	call hardware_io_port_config_irq(0, $01, 1) #Enable interrupt on port 0_0 falling edge
+	call hardware_io_port_config_irq(1, $01, 0) #Enable interrupt on port 1_0 rising edge
+
+    call gap_set_mode($84, gap_non_connectable)	# $84 to enable enhanced broadcasting (central node will acknowlwdge receipt of a broadcast
+
+    call hardware_set_soft_timer(32655, 1, 0)	# continuous 1 second timer
+	no_ack_count = 0	#initialise counter
+	ack_response = 0	#initialise counter
+end
+
+
+# procedure to output ASCII-formatted integer from a Hex value (input range [0, 2147483647]) obtained from https://bluegiga.zendesk.com/entries/83269447-Convert-digit-to-ascii-hex-equivalent
+dim x_int_work(9)
+dim x_int_out(11)
+procedure print_uint31(endpoint, num)
+    x_int_work(0:1) = "\x00"
+    x_int_work(1:4) = num
+    if x_int_work(1:4) = 0 then
+        x_int_out(10 - x_int_work(0:1):1) = "0"       # already zero, so just use it
+        x_int_work(0:1) = x_int_work(0:1) + 1         # string length increment
+    else
+        while x_int_work(1:4) > 0
+            x_int_work(5:4) = (x_int_work(1:4) / 10) * 10     # create "decimal mask" for diff calc
+            x_int_out(10 - x_int_work(0:1):1) = x_int_work(1:4) - x_int_work(5:4) + $30 # next digit
+            x_int_work(0:1) = x_int_work(0:1) + 1             # string length increment
+            x_int_work(1:4) = x_int_work(1:4) / 10            # shift next decimal place over
+        end while
+    end if
+    call system_endpoint_tx(endpoint, x_int_work(0:1), x_int_out(11 - x_int_work(0:1):x_int_work(0:1)))
+end
+
+event hardware_adc_result(input, value)					# event which is run following an ADC conversion
+    call gap_set_mode($84, gap_non_connectable)	# $84 to enable enhanced broadcasting (central node will acknowlwdge receipt of a broadcast
+	call system_endpoint_tx(4, 9, "result = ")			# used as a delay
+	call gap_set_adv_data(0, 2, value)					# send ADC result to central node
+	call system_endpoint_tx(4, 9, "result = ")			# used as a delay
+	call system_endpoint_tx(4, 9, "result = ")			# used as a delay
+	call system_endpoint_tx(4, 9, "result = ")			# used as a delay
+	call gap_set_mode(0, 0)								# disable GAP broadcasts
+end
+
+event hardware_soft_timer(handle)
+	call gap_set_mode(0, 0)
+
+	if ack_response = 0 then 
+		no_ack_count = no_ack_count + 1
+		
+		if no_ack_count = 3
+			#do here tx power adjustment
+		end if
+		
+	end if
+
+	call hardware_adc_read(6, 3, 2)
+end
+	
+
+event gap_scan_response(rssi, packet_type, sender, address_type, bond, data_len, data_data)
+	if packet_type = 4 then
+		ack_response = 1
+		
+	end if
+end
+

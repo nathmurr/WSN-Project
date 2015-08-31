@@ -1,0 +1,67 @@
+#Nathan Murray 
+#Hall sensor node BLE113 script
+#20/08/15 Rev -
+#script checks status of magnet proximity to hall sensor at predetermined sampling intervals and sends data back to central node
+#Battery percentage is appended to data message also
+
+dim bat_pct     # container for battery measurement percentage
+dim result
+
+event system_boot(major ,minor ,patch ,build ,ll_version ,protocol_version ,hw)
+		call hardware_set_txpower(15)#set power to maximum of 0dBm
+		call hardware_io_port_config_direction(0, $03)#Set P0_0 and P0_1 as otputs
+		call hardware_io_port_config_direction(1, $00)#Set P1 as inputs
+		call hardware_io_port_write(0, $01, $00)#set P1_0 low so no pullup on port
+		call hardware_set_soft_timer(327680, 1, 0) #set 10 second timer to run main code
+		call gap_set_mode(0, 0)#turn all advertisements off initially
+end
+
+
+	dim output (10) #initialise output array
+	dim port
+	dim data
+event hardware_soft_timer(handle)
+	if (handle = 1) then # main timer
+		call hardware_io_port_write(0, $01, $01)#set P0_0 high to supply the hall sensor with supply voltage
+		call hardware_io_port_read($1, $1)(result, port, data)#read P1_0 which is the hall sensor output
+		output(0:1) = $2A	#serial number byte 1 = 2A
+		output(1:1) = $F9   #serial number byte 2 = F9 (2AF9 = 11001 in decimal)
+		output(2:1) = result   #the resulting output of the hall sensor
+		output(3:1) = $FF   #end of data
+		output(4:1) = $FF   #end of data to be processed at the other end
+		call hardware_adc_read(15, 3, 0) #read battery percentage adc
+	end if
+	
+	if (handle = 2) then # called after battery ADC read as timeout for gap broadcasts if no response from central node
+		call gap_set_mode(0, 0)	#end broadcasts so processor can go back to sleep and discontinue transmissions
+		call hardware_set_soft_timer(326780, 1, 0) #set original timer back to 10 seconds
+	end if
+end
+
+event hardware_adc_result(input, value)
+
+if input = 15 then #15 is a battery adc read
+	bat_pct = (value - 17616) * 100 / (23342 - 17616) #obtained from bluegiga
+	# enforce 0%/100% bounds, obtained from bluegiga
+        if bat_pct > 100 then
+            bat_pct = 100
+        end if
+        if bat_pct < 0 then
+            bat_pct = 0
+        end if
+		
+		output(5:1) = bat_pct	#set output byte for battery percentage
+		call hardware_set_soft_timer( 0, 1, 1) #disable current timer as only one timer can run at a time
+		call hardware_set_soft_timer(32678, 2, 1)#1 second timeout if central node doesn't acknowledge
+		call gap_set_mode($84, gap_undirected_connectable)	# $84 to enable enhanced broadcasting (central node should acknowlwdge receipt of a broadcast
+		call gap_set_adv_data(0, 6, output_res(0:6))# send result to central node
+
+end if
+end
+
+event gap_scan_response(rssi, packet_type, sender, address_type, bond, data_len, data_data) # central node has acknowledged
+	if packet_type = 3 then	#central node has acknowledged receipt of sent data
+		call gap_set_mode(0, 0)	#end broadcasts so processor can go back to sleep and discontinue transmissions
+	end if
+end
+	

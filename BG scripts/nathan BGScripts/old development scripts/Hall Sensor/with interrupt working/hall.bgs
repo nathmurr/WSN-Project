@@ -1,0 +1,33 @@
+event system_boot(major ,minor ,patch ,build ,ll_version ,protocol_version ,hw)
+call hardware_io_port_config_irq(0, $01, 1) #Enable interrupt on port 0_0 falling edge
+call hardware_io_port_config_irq(1, $01, 0) #Enable interrupt on port 1_0 rising edge
+end
+# procedure to output ASCII-formatted integer from a Hex value (input range [0, 2147483647]) obtained from https://bluegiga.zendesk.com/entries/83269447-Convert-digit-to-ascii-hex-equivalent
+dim x_int_work(9)
+dim x_int_out(11)
+procedure print_uint31(endpoint, num)
+    x_int_work(0:1) = "\x00"
+    x_int_work(1:4) = num
+    if x_int_work(1:4) = 0 then
+        x_int_out(10 - x_int_work(0:1):1) = "0"       # already zero, so just use it
+        x_int_work(0:1) = x_int_work(0:1) + 1         # string length increment
+    else
+        while x_int_work(1:4) > 0
+            x_int_work(5:4) = (x_int_work(1:4) / 10) * 10     # create "decimal mask" for diff calc
+            x_int_out(10 - x_int_work(0:1):1) = x_int_work(1:4) - x_int_work(5:4) + $30 # next digit
+            x_int_work(0:1) = x_int_work(0:1) + 1             # string length increment
+            x_int_work(1:4) = x_int_work(1:4) / 10            # shift next decimal place over
+        end while
+    end if
+    call system_endpoint_tx(endpoint, x_int_work(0:1), x_int_out(11 - x_int_work(0:1):x_int_work(0:1)))
+end
+
+# GPIO interrupt listener
+event hardware_io_port_status(timestamp, port, irq, state)
+call system_endpoint_tx(4, 10, "Activated Dir = ") #Upon event send Activated to Debug UART
+call print_uint31(4, 255-state) # print integer result to UART
+call system_endpoint_tx(4, 2, "\r\n") #Create new line to debug UART
+end
+# Soft timer event listener
+event hardware_soft_timer(handle)
+end 

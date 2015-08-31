@@ -1,0 +1,15 @@
+dim count
+
+event system_boot(major ,minor ,patch ,build ,ll_version ,protocol_version ,hw)
+call hardware_io_port_config_irq(0, $01, 0) #Enable interrupt on port 0_0 rising edge
+count = 0
+#call hardware_io_port_config_irq(1, $01, 0) #Enable interrupt on port 1_0 rising edge
+end
+# GPIO interrupt listener
+event hardware_io_port_status(timestamp, port, irq, state)
+count = count + 1
+call system_endpoint_tx(4, 19, "Movement detected  ") #Upon event send Activated to Debug UART
+end
+# Soft timer event listener
+event hardware_soft_timer(handle)
+end

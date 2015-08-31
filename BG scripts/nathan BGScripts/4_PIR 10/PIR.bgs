@@ -1,0 +1,54 @@
+#Nathan Murray 
+#PIR sensor node BLE113 script
+#20/08/15 Rev -
+#Movement near PIR sensor will cause an interrupt which the sensor node will then send data back to the central node 
+#Battery percentage is appended to data message also
+
+event system_boot(major ,minor ,patch ,build ,ll_version ,protocol_version ,hw)
+	call hardware_set_txpower(15)#set power to maximum of 0dBm
+	call hardware_io_port_config_irq(0, $01, 0)#set port P0_0 as interrupt on rising edge
+	call gap_set_adv_parameters(200, 200, $04)#set min max time to 200 and advertise on one channel only
+	call gap_set_mode(0, 0)#turn all advertisements off initially
+end
+
+dim output (5) #initialise output array
+event hardware_io_port_status(timestamp, port, irq, state) #interrupt has occured on rising edge of P0_0
+	output(0:1) = $27	#serial number byte 1 
+	output(1:1) = $11   #serial number byte 2 (2711 = 10001 in decimal)
+	output(2:1) = $01   #data to send to central node
+	output(3:1) = $FF   #end of data
+	output(4:1) = $FF   #end of data to be processed at the other end
+	call hardware_adc_read(15, 3, 0) #read battery percentage adc
+	
+end
+dim bat_pct
+event hardware_adc_result(input, value)
+
+if input = 15 then #15 is a battery adc read
+	bat_pct = (value - 17616) * 100 / (23342 - 17616) #obtained from bluegiga
+	# enforce 0%/100% bounds, obtained from bluegiga
+        if bat_pct > 100 then
+            bat_pct = 100
+        end if
+        if bat_pct < 0 then
+            bat_pct = 0
+        end if
+		
+		output(5:1) = bat_pct	#set output byte for battery percentage
+		call hardware_set_soft_timer(32678, 1, 1)#1 second timeout if central node doesn't acknowledge
+		call gap_set_mode($84, gap_undirected_connectable)	# $84 to enable enhanced broadcasting (central node should acknowlwdge receipt of a broadcast
+		call gap_set_adv_data(0, 6, output(0:6))# send result to central node
+
+end if
+end
+
+event gap_scan_response(rssi, packet_type, sender, address_type, bond, data_len, data_data) # central node has acknowledged
+	if packet_type = 3 then	#central node has acknowledged receipt of sent data
+		call gap_set_mode(0, 0)	#end broadcasts so processor can go back to sleep and discontinue transmissions
+	end if
+end
+	
+event hardware_soft_timer(handle)#after a few seconds disable advertising and go back into low power mode
+	# Stop advertisements and allow the device to go to PM3
+	call gap_set_mode(0, 0)
+end

@@ -1,0 +1,46 @@
+
+event system_boot(major ,minor ,patch ,build ,ll_version ,protocol_version ,hw)
+	call hardware_set_txpower(15)#set power to maximum of 0dBm
+	call hardware_io_port_config_irq(0, $01, 1)#set port 0_0 J2-3 as interrupt on falling edge
+	call hardware_io_port_config_irq(1, $01, 0) #Enable interrupt on port 1_0 rising edge
+	call gap_set_adv_parameters(200, 200, $04)#set min max time to 200 and advertise on one channel only
+	call gap_set_mode(0, 0)#turn all advertisements off initially
+end
+
+
+dim output (5) #initialise output array
+event hardware_io_port_status(timestamp, port, irq, state) #interrupt has occured
+
+
+if port = 0 #i.e. magnet close to sensor (closed)
+	output(0:1) = $2A	#serial number byte 1 
+	output(1:1) = $F9   #serial number byte 2 (2AF9 = 11001 in decimal)
+	output(2:1) = $00   #this is the data for magnet getting close to sensor
+	output(3:1) = $FF   #end of data
+	output(4:1) = $FF   #end of data to be processed at the other end
+	
+	call gap_set_adv_data(0, 5, output(0:5))#advertise data
+	call gap_set_mode($84, gap_scannable_non_connectable)	# $84 to enable enhanced broadcasting (central node will acknowledge receipt)
+	call hardware_set_soft_timer($10000, 0, 1)#ensure data has been received before disabling advertising by waiting around a couple of seconds
+end if
+
+if port = 1 #i.e. magnet pulled away from sensor (opened)
+	output(0:1) = $2A	#serial number byte 1 
+	output(1:1) = $F9   #serial number byte 2 (2AF9 = 11001 in decimal)
+	output(2:1) = $01   #this is the data for magnet pulled away from sensor
+	output(3:1) = $FF   #end of data
+	output(4:1) = $FF   #end of data to be processed at the other end
+	
+	call gap_set_adv_data(0, 5, output(0:5))#advertise data
+	call gap_set_mode($84, gap_scannable_non_connectable)	# $84 to enable enhanced broadcasting (central node will acknowledge receipt)
+	call hardware_set_soft_timer($10000, 0, 1)#ensure data has been received before disabling advertising by waiting around a couple of seconds
+end if
+	
+		
+end
+	
+event hardware_soft_timer(handle)#after a few seconds disable advertising and go back into low power mode
+	# Stop advertisements and allow the device to go to PM3
+	call gap_set_mode(0, 0)
+end
+

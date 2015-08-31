@@ -1,0 +1,96 @@
+# Nathan Murray Accelerometer sensor
+#Slave address is 0xD0 (8 bit)
+#x,y,z accelerometer data is sent to central node at every sample interval
+#data is sent in 2's complement format which is handled further at the central node end
+#
+#For register map descriptions see MPU-6050 Register map description document
+#Invensense doc number RM-MPU-6000A-00 Rev 4.0
+#
+dim written
+event system_boot(major ,minor ,patch ,build ,ll_version ,protocol_version ,hw)
+call hardware_io_port_config_direction(1, $1)#Set P1_0 as an output to supply noise sensor
+call hardware_io_port_config_direction(0, $00)#Set Port 0 as inputs
+ call hardware_io_port_write(0, $ff, $ff)#Set Port 0 with pullups
+ call hardware_io_port_config_direction(1, $01)
+ call hardware_io_port_write(1, $1, $01)
+ call hardware_io_port_write(1, $ff, $ff)
+ call hardware_io_port_config_direction(2, $0)
+ call hardware_io_port_write(2, $ff, $ff)
+
+call hardware_i2c_write($D0,1,2,"\x1F\x00")(written) #motion detection threshold register 
+call hardware_i2c_write($D0,1,2,"\x23\x08")(written) #FIFO enable register, Set ACCEL_FIFO_EN to 1
+call hardware_i2c_write($D0,1,2,"\x24\x40")(written) #I2C Master control, 0x40 = stop and start bit marks beginning of next read
+call hardware_i2c_write($D0,1,2,"\x6B\x08")(written) #Power Management 1, Disable temperature sensor in accelerometer to save power, Use internal 8MHz oscillator, CYCLE set to 0 so the accelerometer doesn't periodically wake to save power, SLEEP = 0
+call hardware_i2c_write($D0,1,2,"\x6C\xF8")(written) #Power Management 2, Disable Gyro measurements to save power, enable accelerometer x,y,z axis measurements
+call hardware_i2c_write($D0,1,2,"\x1C\x10")(written) #ACCEL_CONFIG set to range of +/- 8G
+call hardware_io_port_config_irq(0, $01, 1)#set port 0_0 J2-3 as interrupt on falling edge
+    call hardware_set_soft_timer(326780, 1, 0)
+	    call gap_set_mode($84, gap_non_connectable)	# $84 to enable enhanced broadcasting (central node will acknowlwdge receipt of a broadcast
+	call gap_set_adv_parameters($4000, $4000, $04)
+    end
+
+
+dim output (10) #initialise output array
+dim xout_high
+dim xout_low
+dim yout_high
+dim	yout_low
+dim zout_high
+dim zout_low
+dim data(3)
+dim result
+dim data_len
+	
+event hardware_soft_timer(handle)
+
+if (handle = 1) then
+	call hardware_io_port_write(1, $1, $1)
+	call hardware_i2c_write($D0,1,2,"\x6B\x08")(written) #Take accelerometer out of sleep
+	output(0:1) = $3A	#serial number byte 1 
+	output(1:1) = $99   #serial number byte 2 (3A99 = 15001 in decimal)
+		
+	call hardware_i2c_write($D0,0,1,"\x3B")(written) # setup in order to read register 0x3B (XOUT(15:8)) X High data
+	call hardware_i2c_read($D0,1,2)(result,data_len,data(0:data_len)) # get register 0x3B value with stop bit
+	output(2:1) = data(0:2) #store received data to array (XOUT HIGH)
+
+	call hardware_i2c_write($D0,0,1,"\x3C")(written) # setup in order to read register 0x3C (XOUT(7:0)) X Low data
+	call hardware_i2c_read($D0,1,2)(result,data_len,data(0:data_len)) # get register 0x3C value with stop bit
+	output(3:1) = data(0:2) #store received data to array (XOUT LOW)
+
+	call hardware_i2c_write($D0,0,1,"\x3D")(written) # setup in order to read register 0x3D (YOUT(15:8)) Y High data
+	call hardware_i2c_read($D0,1,2)(result,data_len,data(0:data_len)) # get register 0x3D value with stop bit
+	output(4:1) = data(0:2) #store received data to array (YOUT HIGH)
+
+	call hardware_i2c_write($D0,0,1,"\x3E")(written) # setup in order to read register 0x3E write to YOUT(7:0) Y Low data
+	call hardware_i2c_read($D0,1,2)(result,data_len,data(0:data_len)) # get register 0x3E value with stop bit
+	output(5:1) = data(0:2)#store received data to array (YOUT LOW)
+
+	call hardware_i2c_write($D0,0,1,"\x3F")(written) # setup in order to read register 0x3F (ZOUT(15:8)) Z high Data
+	call hardware_i2c_read($D0,1,2)(result,data_len,data(0:data_len)) # get register 0x3F value with stop bit
+	output(6:1) = data(0:2)#store received data to array (ZOUT HIGH)
+
+	call hardware_i2c_write($D0,0,1,"\x40")(written) # setup in order to read register 0x40 write to ZOUT(7:0) Z Low data
+	call hardware_i2c_read($D0,1,2)(result,data_len,data(0:data_len)) # get register 0x40 value with stop bit
+	output(7:1) = data(0:2)#store received data to array (ZOUT LOW)
+
+	output(8:1) = $ff  #end of data
+	output(9:1) = $ff  #end of data
+	call gap_set_adv_data(0, 10, output(0:10))	# send ADC result to central node
+	call hardware_set_soft_timer( 0, 1, 1) #disable current timer as only one timer can run at a time
+	call hardware_set_soft_timer(32768, 2, 1)#call single one shot timer handle 2 for timeout in case central node doesn't acknowledge within 1 second
+	
+	call hardware_i2c_write($D0,1,2,"\x6c\xFF")(written) #PWR MGT 2, Disable all gyro and accelerometer x,y,z readings
+	call hardware_i2c_write($D0,1,2,"\x6B\x48")(written)#PWR MGT 1, Put accelerometer into sleep, disable accelerometer temperature sensor
+end if
+
+if (handle = 2) then #disable gap broadcasts in case central node doesn't acknowlwdge
+	call gap_set_mode(0, 0)	# disable GAP broadcasts and go back to sleep
+	call hardware_set_soft_timer(326780, 1, 0) # re enable old timer
+end if
+end
+
+event gap_scan_response(rssi, packet_type, sender, address_type, bond, data_len, data_data) # central node has acknowledged
+	if packet_type = 3 then	#central node has acknowledged receipt of sent data
+		call gap_set_mode(0, 0)	#end broadcasts so processor can go back to sleep and discontinue transmissions
+	end if
+end

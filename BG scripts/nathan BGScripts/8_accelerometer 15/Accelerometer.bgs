@@ -1,0 +1,111 @@
+#Nathan Murray 
+#Accelerometer sensor node BLE113 script
+#20/08/15 Rev -
+#Script communicates to MPU-6050 sensor via I2C address $72
+#Battery percentage is appended to data message also
+
+dim written
+event system_boot(major ,minor ,patch ,build ,ll_version ,protocol_version ,hw)
+call hardware_io_port_config_direction(1, $1)
+call hardware_io_port_config_direction(0, $00)
+ call hardware_io_port_write(0, $ff, $ff)
+ call hardware_io_port_config_direction(1, $01)
+ call hardware_io_port_write(1, $1, $01)
+ call hardware_io_port_write(1, $ff, $ff)
+ call hardware_io_port_config_direction(2, $0)
+ call hardware_io_port_write(2, $ff, $ff)
+#Set timer to generate event every 1s
+call hardware_i2c_write($D0,1,2,"\x1F\x00")(written) 
+call hardware_i2c_write($D0,1,2,"\x23\x08")(written) 
+call hardware_i2c_write($D0,1,2,"\x24\x40")(written)
+call hardware_i2c_write($D0,1,2,"\x37\x10")(written)
+call hardware_i2c_write($D0,1,2,"\x38\x40")(written)   
+call hardware_i2c_write($D0,1,2,"\x6B\x00")(written) 
+call hardware_i2c_write($D0,1,2,"\x6c\x07")(written) 
+call hardware_i2c_write($D0,1,2,"\x1C\x18")(written) 
+call hardware_io_port_config_irq(0, $01, 1)#set port 0_0 J2-3 as interrupt on falling edge
+    call hardware_set_soft_timer(326780, 1, 0)
+	    call gap_set_mode($84, gap_non_connectable)	# $84 to enable enhanced broadcasting (central node will acknowlwdge receipt of a broadcast
+#	call gap_set_adv_parameters($4000, $4000, $04)
+    end
+
+
+dim output (10) #initialise output array
+dim xout_high
+dim xout_low
+dim yout_high
+dim	yout_low
+dim zout_high
+dim zout_low
+dim data(3)
+dim result
+dim data_len
+	
+event hardware_soft_timer(handle)
+
+if (handle = 1) then
+call hardware_io_port_write(1, $1, $1)
+call hardware_i2c_write($D0,1,2,"\x1F\x00")(written) 
+call hardware_i2c_write($D0,1,2,"\x23\x08")(written) 
+call hardware_i2c_write($D0,1,2,"\x24\x40")(written)
+call hardware_i2c_write($D0,1,2,"\x37\x50")(written)
+call hardware_i2c_write($D0,1,2,"\x38\x40")(written)   
+call hardware_i2c_write($D0,1,2,"\x6B\x08")(written) 
+call hardware_i2c_write($D0,1,2,"\x6c\xF8")(written) 
+call hardware_i2c_write($D0,1,2,"\x1C\x18")(written)
+call gap_set_mode($84, gap_non_connectable)	# $84 to enable enhanced broadcasting (central node will acknowlwdge receipt of a broadcast
+	output(0:1) = $3A	#serial number byte 1 
+	output(1:1) = $99   #serial number byte 2 (3A99 = 15001 in decimal)
+	
+	
+
+call hardware_i2c_write($D0,0,1,"\x3B")(written) # write to XOUT(15:8)
+call hardware_i2c_read($D0,1,2)(result,data_len,data(0:data_len)) # get DATA0LOW register value without stop bit
+xout_high = data(0:2)
+output(2:1) = data(0:2)
+
+call hardware_i2c_write($D0,0,1,"\x3C")(written) # write to XOUT(7:0)
+call hardware_i2c_read($D0,1,2)(result,data_len,data(0:data_len)) # get DATA0LOW register value without stop bit
+xout_low = data(0:2)
+output(3:1) = data(0:2)
+
+call hardware_i2c_write($D0,0,1,"\x3D")(written) # write to YOUT(15:8)
+call hardware_i2c_read($D0,1,2)(result,data_len,data(0:data_len)) # get DATA0LOW register value without stop bit
+yout_high = data(0:2)
+output(4:1) = data(0:2)
+
+call hardware_i2c_write($D0,0,1,"\x3E")(written) # write to YOUT(7:0)
+call hardware_i2c_read($D0,1,2)(result,data_len,data(0:data_len)) # get DATA0LOW register value without stop bit
+yout_low = data(0:2)
+output(5:1) = data(0:2)
+
+call hardware_i2c_write($D0,0,1,"\x3F")(written) # write to ZOUT(15:8)
+call hardware_i2c_read($D0,1,2)(result,data_len,data(0:data_len)) # get DATA0LOW register value without stop bit
+zout_high = data(0:2)
+output(6:1) = data(0:2)
+
+call hardware_i2c_write($D0,0,1,"\x40")(written) # write to YOUT(7:0)
+call hardware_i2c_read($D0,1,2)(result,data_len,data(0:data_len)) # get DATA0LOW register value without stop bit
+zout_low = data(0:2)
+output(7:1) = data(0:2)
+
+#call system_endpoint_tx(4, 9, "Data_0 = ")
+#call print_uint31(4, data) # print number to UART1
+
+output(8:1) = $ff  #end of data
+output(9:1) = $ff  #end of data
+#call gap_set_adv_data(0, 10, output(0:10))					# send ADC result to central node
+call hardware_set_soft_timer( 0, 1, 1) #disable current timer as only one timer can run at a time
+call hardware_set_soft_timer(10000, 2, 1)#call single one shot timer handle 2 to allow data to be transferred over the air
+call hardware_i2c_write($D0,1,2,"\x6c\xFF")(written) 
+call hardware_i2c_write($D0,1,2,"\x6B\xC8")(written)
+end if
+
+if (handle = 2) then
+call hardware_set_soft_timer(326780, 1, 0) # re enable old timer
+
+call hardware_io_port_write(1, $1, $0)
+call gap_set_mode(0, 0)								# disable GAP broadcasts and go back to sleep
+end if
+end
+

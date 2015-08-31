@@ -1,0 +1,76 @@
+#Noise sensor node BLE113 script
+#20/08/15 Rev -
+#Battery percentage is appended to data message also
+
+
+dim ranm
+dim temp
+dim bat_pct# container for battery measurement percentage
+dim result
+dim output_res(10)
+
+event system_boot(major ,minor ,patch ,build ,ll_version ,protocol_version ,hw)
+
+	call hardware_io_port_config_direction(0, $00) #Set P0 as inputs
+	call hardware_io_port_write(0, $ff, $fd)	 	#Set pullups on P0
+	call hardware_io_port_config_direction(1, $1) #Set P1_0 as output
+	call hardware_io_port_write(1, $1, $0)			#Set P1_0 low
+	call hardware_io_port_write(1, $ff, $fe)		#Set all other pins on P1 high
+	call hardware_io_port_config_direction(2, $0)  #Set P2 as inputs
+	call hardware_io_port_write(2, $ff, $ff)		#Set P2 pins high
+	call hardware_set_soft_timer(100000, 1, 0) #set timer
+	call gap_set_mode($84, gap_undirected_connectable)	# $84 to enable enhanced broadcasting (central node will acknowlwdge receipt of a broadcast
+	call gap_set_mode(0, 0)#turn all advertisements off initially
+end
+
+
+dim output (5) #initialise output array
+dim port
+dim data
+
+event hardware_soft_timer(handle)
+	
+	if (handle = 1) then # main timer
+		call hardware_io_port_write(1, $1, $1) #Set P1_0 high to supply noise sensor
+		call hardware_adc_read(15, 3, 0) #read battery percentage
+	end if
+	
+	if (handle = 2) then # called after battery percentage ADC read as a timeout in case central node doesn't acknowledge
+		call hardware_io_port_write(1, $1, $0) #Set P1_0 Low to disable noise sensor supply and save power
+		call hardware_set_soft_timer(100000, 1, 0) # set timer to 5 seconds in order to re transmit the non ack so data is not missed
+	end if
+end
+
+event hardware_adc_result(input, value)
+
+if input = 15 then #15 is a battery adc read
+	bat_pct = (value - 17616) * 100 / (23342 - 17616) #obtained from bluegiga
+	# enforce 0%/100% bounds, obtained from bluegiga
+        if bat_pct > 100 then
+            bat_pct = 100
+        end if
+        if bat_pct < 0 then
+            bat_pct = 0
+        end if
+		
+		output_res(5:1) = bat_pct	#set output byte for battery percentage
+		
+	call hardware_io_port_read($0, $2)(result, port, data) #Read output of noise sensor at P0_1 either high or low
+	output(0:1) = $2A	#serial number byte 1 
+	output(1:1) = $F9   #serial number byte 2 (2AF9 = 11001 in decimal)
+	output(2:1) = result#noise sensor result
+	output(3:1) = $FF   #end of data
+	output(4:1) = $FF   #end of data to be processed at the other end
+	
+	call hardware_set_soft_timer( 0, 1, 1) #disable current timer as only one timer can run at a time
+	call hardware_set_soft_timer(32768, 2, 1)#timeout in case central node doesn't acknowledge
+	call gap_set_adv_data(0, 6, output_res(0:6))# send result to central node
+
+end if
+end
+
+event gap_scan_response(rssi, packet_type, sender, address_type, bond, data_len, data_data) # central node has spoken
+	if packet_type = 3 then	#central node has acknowledged receipt of sent data
+	call gap_set_mode(0, 0)	#end broadcasts so processor can go back to sleep and discontinue transmissions
+	end if
+	end

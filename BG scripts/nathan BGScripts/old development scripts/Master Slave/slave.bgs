@@ -1,0 +1,151 @@
+# ================================================================
+# BGScript demo: Multislave project, slave side
+# http://www.bluegiga.com/support
+# ----------------------------------------------------------------
+#
+# CHANGELOG:
+#   2014-03-11 - Initial release
+#
+# ================================================================
+
+dim connected
+dim encrypted
+dim indicate_ready
+
+dim i
+dim temp_buf(4)
+
+event system_boot(major, minor, patch, build, ll_version, protocol_version, hw)
+    # DEBUG
+    call system_endpoint_tx(system_endpoint_uart1, 6, "BOOT\r\n")
+
+    # initialize status
+    connected = 0
+    encrypted = 0
+    indicate_ready = 0
+    
+    # PORT0 pins are all inputs
+    call hardware_io_port_config_direction(0, 0)
+    
+    # enable interrupt detection on P0_0 pin, rising edge
+    call hardware_io_port_config_irq(0, $1, 0)
+    
+    # set advertisement interval to 200-300ms
+    call gap_set_adv_parameters(320, 480, 7)
+
+    # DEBUG
+    call system_endpoint_tx(system_endpoint_uart1, 13, "ROLE: SLAVE\r\n")
+    call system_endpoint_tx(system_endpoint_uart1, 16, "ADVERTISING\r\n")
+
+    # put module into discoverable/connectable mode
+    call gap_set_mode(gap_general_discoverable, gap_undirected_connectable)
+end
+
+# catch connection update event
+event connection_status(connection, flags, address, address_type, conn_interval, timeout, latency, bonding)
+    # check for "new connection established" update
+    if (flags & $05) = $05 then
+        # DEBUG
+        call system_endpoint_tx(system_endpoint_uart1, 20, "CONNECTED AS SLAVE\r\n")
+        
+        # update status
+        connected = 1
+    end if
+
+    # check for "encrypted" status update (i.e. paired)
+    if (flags & $02) = $02 then
+        # DEBUG
+        call system_endpoint_tx(system_endpoint_uart1, 11, "ENCRYPTED\r\n")
+        
+        # update status
+        encrypted = 1
+    end if
+end
+
+# catch disconnection event
+event connection_disconnected(handle, result)
+    # DEBUG
+    call system_endpoint_tx(system_endpoint_uart1, 14, "DISCONNECTED: ")
+    temp_buf(0:1) = ((result >> 12) & $f) + 48 + ((result >> 12) & $f)/10*7
+    temp_buf(1:1) = ((result >> 8) & $f) + 48 + ((result >> 8) & $f)/10*7
+    temp_buf(2:1) = ((result >> 4) & $f) + 48 + ((result >> 4) & $f)/10*7
+    temp_buf(3:1) = (result & $f) + 48 + (result & $f)/10*7
+    call system_endpoint_tx(system_endpoint_uart1, 4, temp_buf(0:4))
+    call system_endpoint_tx(system_endpoint_uart1, 2, "\r\n")
+    
+    # update status
+    connected = 0
+    encrypted = 0
+    indicate_ready = 0
+    
+    # stop continuous 1-second timer
+    call hardware_set_soft_timer(0, 0, 0)
+
+    # DEBUG
+    call system_endpoint_tx(system_endpoint_uart1, 13, "ADVERTISING\r\n")
+
+    # put module into discoverable/connectable mode
+    call gap_set_mode(gap_general_discoverable, gap_undirected_connectable)
+end
+
+# catch timer tick (used for master/slave ping-pong and other things)
+event hardware_soft_timer(handle)
+    # write "ping" update to master (0x44434241 which is "ABCD" in ASCII, big-endian)
+    # this will be pushed via indications if the master has subscribed to them
+    call attributes_write(c_status_control, 0, 4, $44434241)
+end
+
+# catch status update so we know when the other client is connected + subscribed
+event attributes_status(handle, flags)
+    if handle = c_status_control then
+        if flags = 2 then
+            # DEBUG
+            call system_endpoint_tx(system_endpoint_uart1, 21, "INDICATIONS ENABLED\r\n")
+
+            # start continuous 1-second timer so we can "ping" the master
+            call hardware_set_soft_timer(32768, 0, 0)
+
+            # update status
+            indicate_ready = 1
+        else
+            # DEBUG
+            call system_endpoint_tx(system_endpoint_uart1, 22, "INDICATIONS DISABLED\r\n")
+
+            # start continuous 1-second timer
+            call hardware_set_soft_timer(0, 0, 0)
+
+            # update status
+            indicate_ready = 0
+        end if
+    end if
+end
+
+# catch remote write of characteristic value
+event attributes_value(connection, reason, handle, offset, value_len, value_data)
+    if handle = c_status_control then
+        # DEBUG (rudimentary binary-to-ASCII-HEX loop to display all 4 written bytes)
+        call system_endpoint_tx(system_endpoint_uart1, 8, "MASTER: ")
+        i = 0
+        while i < value_len
+            temp_buf(0:1) = (value_data(i:1)/$10) + 48 + ((value_data(i:1)/$10)/10*7)
+            temp_buf(1:1) = (value_data(i:1)&$f)  + 48 + ((value_data(i:1)&$f )/10*7)
+            temp_buf(2:1) = $20 # ' '
+            call system_endpoint_tx(system_endpoint_uart1, 3, temp_buf(0:3))
+            i = i + 1
+        end while
+        call system_endpoint_tx(system_endpoint_uart1, 2, "\r\n")
+    end if
+end
+
+# catch interrupts for input pins (P0_0 rising edge in this demo)
+event hardware_io_port_status(timestamp, port, irq, state)
+    # make sure it was P0_0, though that is the only one we configured
+    if port = 0 && (irq & 1) = 1 then
+        # DEBUG
+        call system_endpoint_tx(system_endpoint_uart1, 14, "P0_0 PRESSED\r\n")
+
+        # write "io" update to master (0x5A595857 which is "WXYZ" in ASCII, big-endian)
+        # this will be pushed via indications if the master has subscribed to them
+        call attributes_write(c_status_control, 0, 4, $5a595857)
+    end if
+end

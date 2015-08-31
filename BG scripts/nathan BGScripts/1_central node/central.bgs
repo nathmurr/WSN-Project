@@ -1,0 +1,20 @@
+#Nathan Murray 
+#Central node BLE113 script
+#20/08/15 Rev -
+
+event system_boot(major ,minor ,patch ,build ,ll_version ,protocol_version ,hw)
+	call gap_set_scan_parameters($100, $55, 1)		#set scan parameters, 0x4B = default scan interval 75ms, 0x32 = default scan_window 50ms, 0x00 = passive scanning
+	call gap_set_mode($84, gap_undirected_connectable)
+	call gap_discover(gap_discover_observation)		#discover limited and generic discoverable devices
+
+end
+
+dim  rssi_val
+dim data(15)
+
+event gap_scan_response(rssi, packet_type, sender, address_type, bond, data_len, data_data)# broadcast received
+	data(0:data_len) = data_data(0:data_len) # store received data transmission
+	data(data_len:1) = rssi	#add rssi value to end of data
+	call system_endpoint_tx(4, data_len+1, data(0:data_len+1)) #send data to COM port
+end
+	

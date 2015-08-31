@@ -1,0 +1,132 @@
+# Nathan Murray Prototype Electricity sensor
+#
+#Electricity sensor node BLE113 script
+#20/08/15 Rev -
+#Battery percentage is appended to data message also
+#With current clamp placed around the live wire of distrubution box, 50Hz current is peak detected
+#The ADC sends the peak detected voltage to the central node which is then further analysed
+#
+#Note: Adaptive Power algorithm is incorporated into the script
+#Note: Battery percentage incorporated also
+
+dim output_res(6)
+dim ranm
+dim temp
+dim bat_pct# container for battery measurement percentage
+dim no_ack_count# counter for central node no acknowledgement count
+dim ack_response# counter for central node acknowledge response flag
+dim ack_count # counter for central node acknowledgement count
+dim power # power level variable
+dim response_received # flag for central node response received
+
+event system_boot(major, minor, patch, build, ll_version, protocol_version, hw)
+	call gap_set_mode(0, 0) #don't enable broadcasts at startup
+	call gap_set_adv_parameters(200, 300, $04)
+	call hardware_io_port_config_direction(1, $40) #Set P1_4 as output which controls power to op amp 
+	call hardware_set_soft_timer(326780, 1, 0) #Set amin timer to X seconds
+	power = 15 #start transmitting at highest power level (15)
+	call hardware_set_txpower(power) # set power level to 15 initially 
+	no_ack_count = 0
+	response_received = 0
+	call gap_set_mode($84, gap_undirected_connectable)	# $84 to enable enhanced broadcasting (central node will acknowlwdge receipt of a broadcast
+	#call gap_set_adv_data(0, 1, $FF)# send continuous data to central node for adaptive power algorithm
+end
+
+event hardware_soft_timer(handle)
+
+		
+	if (handle = 1) then # main timer
+		call hardware_io_port_write(1, $40, $01) # Set P1_4 high to power op amp peak detector circuit
+		call system_endpoint_tx(4,1, "AB")#This is used as a delay for the op amp circuit to stabilise
+			
+		response_received = 0 # set response flag to 0 = central node not responded
+		call hardware_adc_read(0, 3, 2)# trigger ADC read on P0_0, full 12-bit decimation, AVDD reference
+		call hardware_adc_read(15, 3, 0) #read battery percentage
+		
+		if ack_count > 5 then # decrease power as 5 acknowledgements in row received
+			if power < 16 then		#if Power is between 1 and 15
+				if power > 0 then
+					power = power - 1 #decrease power by 1
+					call hardware_set_txpower(power) # set new power level 
+					ack_count = 0 # reset acknowlwdge counter
+					else
+					ack_count = 5 # If power level = 0 then do nothing as can't reduce any power any further
+				end if
+			end if
+		end if
+		
+		call hardware_set_soft_timer( 0, 1, 1) #disable current timer as only one timer can run at a time
+		call hardware_set_soft_timer(64000, 2, 1)#timeout in case central node doesn't acknowledge within 1 second
+	end if
+	
+	if (handle = 2) then # broadcast timeout if central node does not acknowledge within 1 second
+			if response_received = 0 then # no response received from central node within 1 second
+				if ack_count > 0 then	# if acknowledge count is greater than zero then decrease ack_count by 1
+					ack_count = ack_count - 1
+				end if
+		
+				call gap_set_mode(0, 0) # stop Gap transmissions if still transmitting
+				no_ack_count = no_ack_count + 1
+		
+				if no_ack_count > 3 then #if 3 consecutive no acknowledgements received then increase power
+					if power < 15 then #if power is less than 15
+						power = power + 1 #increment power
+						call hardware_set_txpower(power) # set new power level 
+						no_ack_count = 0 # reset no acknowledge counter
+						else
+						power = 15 # keep power at 15 as can't set power any higher
+						call hardware_set_txpower(power) # set power level to 15
+						no_ack_count = 0 # reset no acknowledge counter
+					end if
+				end if
+					
+			
+		
+			call gap_set_mode(0, 0)	# stop Gap transmissions if still transmitting
+			call hardware_set_soft_timer(163840, 1, 0) # set timer to 5 seconds in order to re transmit the non ack so data is not missed
+			end if
+	end if
+end
+
+event hardware_adc_result(input, value) # Read peak detected current voltage
+	if input = $0 then # If ADC read is P0_0
+		temp = (value >> 8) #bit shift by 8 to get MSB
+		ranm = value	#store LSB into ranm
+
+		output_res(0:1) = $4E	#serial number byte 1 
+		output_res(1:1) = $21   #serial number byte 2 (4E21 = 20001 in decimal)
+		output_res(2:3) = temp	#MSB of ADC read (2's complement)
+		output_res(3:3) = ranm  #LSB of ADC read (2's complement)
+		output_res(4:1) = $FF   #end of data 
+		output_res(5:1) = $FF   #end of data
+	end if
+
+if input = 15 then #15 is a battery adc read
+	bat_pct = (value - 17616) * 100 / (23342 - 17616) #obtained from bluegiga
+		# enforce 0%/100% bounds, obtained from bluegiga
+        if bat_pct > 100 then
+            bat_pct = 100
+        end if
+        if bat_pct < 0 then
+            bat_pct = 0
+        end if
+		
+		output_res(6:1) = bat_pct	#set output byte for battery percentage
+		call gap_set_adv_data(0, 6, output_res(0:6))# send results to central node
+		call hardware_io_port_write(1, $40, $00) # Set P0_4 low to disable op amp circuit and save power
+end if
+end
+
+event gap_scan_response(rssi, packet_type, sender, address_type, bond, data_len, data_data) # central node has spoken
+	if packet_type = 3 then	#central node has acknowledged receipt of sent data
+		response_received = 1 #set acknowledged flag to 1
+		ack_count = ack_count + 1 #increment acknowledge count
+		
+		if no_ack_count > 0 then # decrement no_acknowledgment count if greater than 0
+			no_ack_count = no_ack_count - 1
+		end if
+				
+		call gap_set_mode(0, 0)	#end broadcasts so processor can go back to sleep and discontinue transmissions
+	end if
+end
+
